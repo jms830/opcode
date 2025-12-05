@@ -5,6 +5,7 @@ mod checkpoint;
 mod claude_binary;
 mod commands;
 mod process;
+mod shell_environment;
 
 use checkpoint::state::CheckpointState;
 use commands::agents::{
@@ -37,6 +38,10 @@ use commands::mcp::{
 };
 
 use commands::proxy::{apply_proxy_settings, get_proxy_settings, save_proxy_settings};
+use commands::shell::{
+    auto_detect_wsl_claude, check_wsl_claude, get_available_shells, get_shell_config,
+    save_shell_config,
+};
 use commands::storage::{
     storage_delete_row, storage_execute_sql, storage_insert_row, storage_list_tables,
     storage_read_table, storage_reset_database, storage_update_row,
@@ -289,6 +294,12 @@ fn main() {
             // Proxy Settings
             get_proxy_settings,
             save_proxy_settings,
+            // Shell Environment
+            get_available_shells,
+            get_shell_config,
+            save_shell_config,
+            check_wsl_claude,
+            auto_detect_wsl_claude,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
