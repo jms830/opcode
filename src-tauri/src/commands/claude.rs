@@ -10,6 +10,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+#[cfg(windows)]
+use crate::shell_environment::{create_wsl_command, ShellConfig, ShellEnvironment};
+
 /// Global state to track current Claude process
 pub struct ClaudeProcessState {
     pub current_process: Arc<Mutex<Option<Child>>>,
@@ -132,6 +135,62 @@ pub struct FileEntry {
 /// This is necessary because macOS apps have a limited PATH environment
 fn find_claude_binary(app_handle: &AppHandle) -> Result<String, String> {
     crate::claude_binary::find_claude_binary(app_handle)
+}
+
+/// Gets the shell configuration from the database
+#[cfg(windows)]
+fn get_shell_config_sync(app_handle: &AppHandle) -> ShellConfig {
+    use tauri::Manager;
+
+    if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+        let db_path = app_data_dir.join("agents.db");
+        if db_path.exists() {
+            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                let environment = conn
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key = 'shell_environment'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_default();
+
+                let wsl_distro = conn
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key = 'wsl_distro'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok();
+
+                let wsl_claude_path = conn
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key = 'wsl_claude_path'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok();
+
+                let git_bash_path = conn
+                    .query_row(
+                        "SELECT value FROM app_settings WHERE key = 'git_bash_path'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok();
+
+                return ShellConfig {
+                    environment,
+                    wsl_distro,
+                    wsl_claude_path,
+                    git_bash_path,
+                };
+            }
+        }
+    }
+
+    ShellConfig::default()
 }
 
 /// Gets the path to the ~/.claude directory
@@ -303,6 +362,87 @@ fn create_system_command(claude_path: &str, args: Vec<String>, project_path: &st
         .stderr(Stdio::piped());
 
     cmd
+}
+
+/// Creates a system binary command with shell environment support (Windows only)
+/// On Windows, this respects the shell configuration for WSL/Git Bash support
+#[cfg(windows)]
+fn create_system_command_with_shell(
+    claude_path: &str,
+    args: Vec<String>,
+    project_path: &str,
+    shell_config: &ShellConfig,
+) -> Command {
+    match shell_config.environment {
+        ShellEnvironment::Wsl => {
+            // Use WSL to run Claude
+            let wsl_claude_path = shell_config.wsl_claude_path.as_deref().unwrap_or("claude");
+
+            log::info!(
+                "Creating WSL command for Claude: {} in distro {:?}",
+                wsl_claude_path,
+                shell_config.wsl_distro
+            );
+
+            // Create the WSL command using the helper from shell_environment
+            let std_cmd = create_wsl_command(
+                shell_config.wsl_distro.as_deref(),
+                wsl_claude_path,
+                &args,
+                project_path,
+            );
+
+            // Convert std::process::Command to tokio::process::Command
+            let mut tokio_cmd = Command::new(std_cmd.get_program());
+            for arg in std_cmd.get_args() {
+                tokio_cmd.arg(arg);
+            }
+
+            tokio_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+            tokio_cmd
+        }
+        ShellEnvironment::GitBash => {
+            // Use Git Bash to run Claude
+            let git_bash = shell_config
+                .git_bash_path
+                .as_deref()
+                .unwrap_or(r"C:\Program Files\Git\bin\bash.exe");
+
+            log::info!("Creating Git Bash command for Claude: {}", claude_path);
+
+            let mut cmd = Command::new(git_bash);
+
+            // Build the command string for bash
+            let claude_args: String = args
+                .iter()
+                .map(|arg| {
+                    let escaped = arg
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('$', "\\$");
+                    format!("\"{}\"", escaped)
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let bash_command = format!(
+                "cd '{}' && '{}' {}",
+                project_path.replace('\\', "/").replace('\'', "'\\''"),
+                claude_path.replace('\\', "/"),
+                claude_args
+            );
+
+            cmd.args(["-lc", &bash_command]);
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+            cmd
+        }
+        ShellEnvironment::Native => {
+            // Use standard Windows command
+            create_system_command(claude_path, args, project_path)
+        }
+    }
 }
 
 /// Gets the user's home directory path
@@ -943,7 +1083,17 @@ pub async fn execute_claude_code(
         "--dangerously-skip-permissions".to_string(),
     ];
 
+    // On Windows, use shell-aware command creation
+    #[cfg(windows)]
+    let cmd = {
+        let shell_config = get_shell_config_sync(&app);
+        log::info!("Using shell environment: {:?}", shell_config.environment);
+        create_system_command_with_shell(&claude_path, args, &project_path, &shell_config)
+    };
+
+    #[cfg(not(windows))]
     let cmd = create_system_command(&claude_path, args, &project_path);
+
     spawn_claude_process(app, cmd, prompt, model, project_path).await
 }
 
@@ -975,7 +1125,17 @@ pub async fn continue_claude_code(
         "--dangerously-skip-permissions".to_string(),
     ];
 
+    // On Windows, use shell-aware command creation
+    #[cfg(windows)]
+    let cmd = {
+        let shell_config = get_shell_config_sync(&app);
+        log::info!("Using shell environment: {:?}", shell_config.environment);
+        create_system_command_with_shell(&claude_path, args, &project_path, &shell_config)
+    };
+
+    #[cfg(not(windows))]
     let cmd = create_system_command(&claude_path, args, &project_path);
+
     spawn_claude_process(app, cmd, prompt, model, project_path).await
 }
 
@@ -1010,7 +1170,17 @@ pub async fn resume_claude_code(
         "--dangerously-skip-permissions".to_string(),
     ];
 
+    // On Windows, use shell-aware command creation
+    #[cfg(windows)]
+    let cmd = {
+        let shell_config = get_shell_config_sync(&app);
+        log::info!("Using shell environment: {:?}", shell_config.environment);
+        create_system_command_with_shell(&claude_path, args, &project_path, &shell_config)
+    };
+
+    #[cfg(not(windows))]
     let cmd = create_system_command(&claude_path, args, &project_path);
+
     spawn_claude_process(app, cmd, prompt, model, project_path).await
 }
 
