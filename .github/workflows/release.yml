@@ -23,6 +23,8 @@ jobs:
   build-macos:
     uses: ./.github/workflows/build-macos.yml
     secrets: inherit
+    # Continue even if macOS build fails (e.g., missing Apple signing secrets in forks)
+    continue-on-error: true
   
   build-windows:
     uses: ./.github/workflows/build-windows.yml
@@ -32,6 +34,8 @@ jobs:
   create-release:
     name: Create Release
     needs: [build-linux, build-macos, build-windows]
+    # Run even if macOS build failed
+    if: always() && needs.build-linux.result == 'success' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     
     steps:
