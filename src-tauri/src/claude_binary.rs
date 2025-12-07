@@ -24,10 +24,13 @@ pub struct ClaudeInstallation {
     pub path: String,
     /// Version string if available
     pub version: Option<String>,
-    /// Source of discovery (e.g., "nvm", "system", "homebrew", "which")
+    /// Source of discovery (e.g., "nvm", "system", "homebrew", "which", "wsl")
     pub source: String,
     /// Type of installation
     pub installation_type: InstallationType,
+    /// WSL distribution name (if this is a WSL installation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
 }
 
 /// Main function to find the Claude binary
@@ -204,6 +207,7 @@ fn try_which_command() -> Option<ClaudeInstallation> {
                 version,
                 source: "which".to_string(),
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             })
         }
         _ => None,
@@ -245,6 +249,7 @@ fn try_which_command() -> Option<ClaudeInstallation> {
                 version,
                 source: "where".to_string(),
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             })
         }
         _ => None,
@@ -269,6 +274,7 @@ fn find_nvm_installations() -> Vec<ClaudeInstallation> {
                 version,
                 source: "nvm-active".to_string(),
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             });
         }
     }
@@ -337,6 +343,7 @@ fn find_nvm_installations() -> Vec<ClaudeInstallation> {
                             version,
                             source: format!("nvm ({})", node_version),
                             installation_type: InstallationType::System,
+                            wsl_distro: None,
                         });
                     }
                 }
@@ -407,6 +414,7 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
                 version,
                 source,
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             });
         }
     }
@@ -422,6 +430,7 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
                 version,
                 source: "PATH".to_string(),
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             });
         }
     }
@@ -476,6 +485,7 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
                 version,
                 source,
                 installation_type: InstallationType::System,
+                wsl_distro: None,
             });
         }
     }
@@ -491,11 +501,205 @@ fn find_standard_installations() -> Vec<ClaudeInstallation> {
                 version,
                 source: "PATH".to_string(),
                 installation_type: InstallationType::System,
+                wsl_distro: None,
+            });
+        }
+    }
+
+    // Also check WSL installations
+    installations.extend(find_wsl_installations());
+
+    installations
+}
+
+/// Find Claude installations in WSL distributions (Windows only)
+#[cfg(windows)]
+fn find_wsl_installations() -> Vec<ClaudeInstallation> {
+    let mut installations = Vec::new();
+
+    debug!("Checking for Claude installations in WSL...");
+
+    // Get list of WSL distributions
+    let distros = match get_wsl_distributions() {
+        Ok(d) => d,
+        Err(e) => {
+            debug!("Failed to get WSL distributions: {}", e);
+            return installations;
+        }
+    };
+
+    for distro in distros {
+        debug!("Checking WSL distribution: {}", distro);
+
+        // Try to find claude in this distribution
+        if let Some(claude_path) = find_claude_in_wsl(&distro) {
+            debug!("Found Claude in WSL {}: {}", distro, claude_path);
+
+            // Get version
+            let version = get_claude_version_in_wsl(&distro, &claude_path);
+
+            installations.push(ClaudeInstallation {
+                path: claude_path,
+                version,
+                source: format!("wsl ({})", distro),
+                installation_type: InstallationType::System,
+                wsl_distro: Some(distro),
             });
         }
     }
 
     installations
+}
+
+/// Get list of WSL distributions
+#[cfg(windows)]
+fn get_wsl_distributions() -> Result<Vec<String>, String> {
+    // Run: wsl -l -q (quiet mode, just names)
+    let output = Command::new("wsl")
+        .args(["-l", "-q"])
+        .output()
+        .map_err(|e| format!("Failed to run wsl -l -q: {}", e))?;
+
+    if !output.status.success() {
+        return Err("wsl -l -q failed".to_string());
+    }
+
+    // WSL output is UTF-16 LE encoded on Windows
+    let output_str = String::from_utf16_lossy(
+        &output
+            .stdout
+            .chunks(2)
+            .filter_map(|chunk| {
+                if chunk.len() == 2 {
+                    Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<u16>>(),
+    );
+
+    let distros: Vec<String> = output_str
+        .lines()
+        .map(|s| s.trim().trim_matches('\0').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    debug!("Found WSL distributions: {:?}", distros);
+    Ok(distros)
+}
+
+/// Find Claude binary path in a WSL distribution
+#[cfg(windows)]
+fn find_claude_in_wsl(distro: &str) -> Option<String> {
+    // Try 'which claude' in the WSL distribution
+    let output = Command::new("wsl")
+        .args(["-d", distro, "--", "which", "claude"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() && !path.contains("not found") {
+            return Some(path);
+        }
+    }
+
+    // Try common paths if 'which' doesn't work
+    let common_paths = ["/usr/local/bin/claude", "/usr/bin/claude"];
+
+    // Also check NVM paths - first get home directory
+    if let Some(home) = get_wsl_home_dir(distro) {
+        // Check if there's an NVM installation
+        let nvm_base = format!("{}/.nvm/versions/node", home);
+
+        // List node versions and check for claude
+        let output = Command::new("wsl")
+            .args(["-d", distro, "--", "ls", "-1", &nvm_base])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let versions = String::from_utf8_lossy(&output.stdout);
+                for version in versions.lines() {
+                    let version = version.trim();
+                    if !version.is_empty() {
+                        let claude_path = format!("{}/{}/bin/claude", nvm_base, version);
+                        // Check if claude exists at this path
+                        let check = Command::new("wsl")
+                            .args(["-d", distro, "--", "test", "-f", &claude_path])
+                            .output();
+
+                        if let Ok(check) = check {
+                            if check.status.success() {
+                                return Some(claude_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check ~/.local/bin/claude
+        let local_claude = format!("{}/.local/bin/claude", home);
+        let check = Command::new("wsl")
+            .args(["-d", distro, "--", "test", "-f", &local_claude])
+            .output();
+
+        if let Ok(check) = check {
+            if check.status.success() {
+                return Some(local_claude);
+            }
+        }
+    }
+
+    // Check common system paths
+    for path in common_paths {
+        let check = Command::new("wsl")
+            .args(["-d", distro, "--", "test", "-f", path])
+            .output();
+
+        if let Ok(check) = check {
+            if check.status.success() {
+                return Some(path.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Get home directory in WSL
+#[cfg(windows)]
+fn get_wsl_home_dir(distro: &str) -> Option<String> {
+    let output = Command::new("wsl")
+        .args(["-d", distro, "--", "echo", "$HOME"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !home.is_empty() {
+            return Some(home);
+        }
+    }
+
+    None
+}
+
+/// Get Claude version in WSL
+#[cfg(windows)]
+fn get_claude_version_in_wsl(distro: &str, claude_path: &str) -> Option<String> {
+    let output = Command::new("wsl")
+        .args(["-d", distro, "--", claude_path, "--version"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        extract_version_from_output(&output.stdout)
+    } else {
+        None
+    }
 }
 
 /// Get Claude version by running --version command

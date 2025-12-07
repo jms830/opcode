@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { api, type ClaudeInstallation } from "@/lib/api";
+import { api, type ClaudeInstallation, type ShellConfig, type AvailableShells } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { CheckCircle, HardDrive, Settings, Terminal, Info } from "lucide-react";
+import { CheckCircle, HardDrive, Settings, Terminal, Info, ChevronDown, ChevronRight, Loader2, Check } from "lucide-react";
 
 interface ClaudeVersionSelectorProps {
   /**
@@ -37,6 +38,14 @@ interface ClaudeVersionSelectorProps {
    * Simplified mode for cleaner UI
    */
   simplified?: boolean;
+  /**
+   * Callback when shell config changes (for parent to track changes)
+   */
+  onShellConfigChange?: (config: ShellConfig, hasChanges: boolean) => void;
+  /**
+   * Initial shell config (if loading from settings)
+   */
+  initialShellConfig?: ShellConfig | null;
 }
 
 /**
@@ -57,14 +66,24 @@ export const ClaudeVersionSelector: React.FC<ClaudeVersionSelectorProps> = ({
   onSave,
   isSaving = false,
   simplified = false,
+  onShellConfigChange,
+  initialShellConfig,
 }) => {
   const [installations, setInstallations] = useState<ClaudeInstallation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedInstallation, setSelectedInstallation] = useState<ClaudeInstallation | null>(null);
+  
+  // Advanced settings state
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [shellConfig, setShellConfig] = useState<ShellConfig | null>(initialShellConfig || null);
+  const [availableShells, setAvailableShells] = useState<AvailableShells | null>(null);
+  const [detectingWslClaude, setDetectingWslClaude] = useState(false);
+  const [isWindows, setIsWindows] = useState(false);
 
   useEffect(() => {
     loadInstallations();
+    loadShellSettings();
   }, []);
 
   useEffect(() => {
@@ -100,6 +119,49 @@ export const ClaudeVersionSelector: React.FC<ClaudeVersionSelectorProps> = ({
       setError(err instanceof Error ? err.message : "Failed to load Claude installations");
     } finally {
       setLoading(false);
+    }
+  };
+  
+  const loadShellSettings = async () => {
+    try {
+      const shells = await api.getAvailableShells();
+      setAvailableShells(shells);
+      
+      // Detect if we're on Windows
+      const onWindows = shells.wsl_distributions.length > 0 || !!shells.git_bash_path;
+      setIsWindows(onWindows);
+      
+      // Load current shell config if not provided
+      if (!initialShellConfig) {
+        const config = await api.getShellConfig();
+        setShellConfig(config);
+      }
+    } catch (err) {
+      console.error("Failed to load shell settings:", err);
+    }
+  };
+  
+  const updateShellConfig = (updates: Partial<ShellConfig>) => {
+    const newConfig = shellConfig 
+      ? { ...shellConfig, ...updates } 
+      : { environment: 'native' as const, ...updates };
+    setShellConfig(newConfig);
+    onShellConfigChange?.(newConfig, true);
+  };
+  
+  const handleAutoDetectWslClaude = async () => {
+    if (!shellConfig?.wsl_distro) return;
+    
+    setDetectingWslClaude(true);
+    try {
+      const result = await api.autoDetectWslClaude(shellConfig.wsl_distro);
+      if (result && result.wsl_claude_path) {
+        updateShellConfig({ wsl_claude_path: result.wsl_claude_path });
+      }
+    } catch (err) {
+      console.error("Failed to auto-detect Claude in WSL:", err);
+    } finally {
+      setDetectingWslClaude(false);
     }
   };
 
@@ -259,7 +321,149 @@ export const ClaudeVersionSelector: React.FC<ClaudeVersionSelectorProps> = ({
             <Info className="h-3.5 w-3.5 text-muted-foreground mt-0.5" />
             <div className="text-xs text-muted-foreground">
               <span className="font-medium">Path:</span> <code className="font-mono">{selectedInstallation.path}</code>
+              {selectedInstallation.wsl_distro && (
+                <span className="ml-2">
+                  <Badge variant="outline" className="text-xs">WSL: {selectedInstallation.wsl_distro}</Badge>
+                </span>
+              )}
             </div>
+          </div>
+        )}
+        
+        {/* Advanced Settings (Windows only) */}
+        {isWindows && (
+          <div className="pt-2">
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showAdvanced ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Advanced Settings
+            </button>
+            
+            {showAdvanced && (
+              <div className="mt-3 p-3 border rounded-lg space-y-4 bg-muted/30">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Configure how opcode runs Claude Code on Windows. Override auto-detected settings if needed.
+                  </p>
+                </div>
+                
+                {/* Shell Environment Selector */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Shell Environment</Label>
+                  <div className="flex items-center gap-1 p-1 bg-muted/50 rounded-md w-fit">
+                    <button
+                      onClick={() => updateShellConfig({ environment: 'native' })}
+                      className={cn(
+                        "flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded transition-all",
+                        shellConfig?.environment === 'native' 
+                          ? "bg-background shadow-sm" 
+                          : "hover:bg-background/50"
+                      )}
+                    >
+                      {shellConfig?.environment === 'native' && <Check className="h-3 w-3" />}
+                      Native
+                    </button>
+                    {availableShells && availableShells.wsl_distributions.length > 0 && (
+                      <button
+                        onClick={() => {
+                          const defaultDistro = availableShells.wsl_distributions.find(d => d.is_default)?.name 
+                            || availableShells.wsl_distributions[0]?.name;
+                          updateShellConfig({ environment: 'wsl', wsl_distro: defaultDistro });
+                        }}
+                        className={cn(
+                          "flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded transition-all",
+                          shellConfig?.environment === 'wsl' 
+                            ? "bg-background shadow-sm" 
+                            : "hover:bg-background/50"
+                        )}
+                      >
+                        {shellConfig?.environment === 'wsl' && <Check className="h-3 w-3" />}
+                        WSL
+                      </button>
+                    )}
+                    {availableShells?.git_bash_path && (
+                      <button
+                        onClick={() => updateShellConfig({ environment: 'gitbash', git_bash_path: availableShells.git_bash_path })}
+                        className={cn(
+                          "flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded transition-all",
+                          shellConfig?.environment === 'gitbash' 
+                            ? "bg-background shadow-sm" 
+                            : "hover:bg-background/50"
+                        )}
+                      >
+                        {shellConfig?.environment === 'gitbash' && <Check className="h-3 w-3" />}
+                        Git Bash
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                {/* WSL Distribution Selector */}
+                {shellConfig?.environment === 'wsl' && availableShells && availableShells.wsl_distributions.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs">WSL Distribution</Label>
+                    <select
+                      value={shellConfig.wsl_distro || ''}
+                      onChange={(e) => updateShellConfig({ wsl_distro: e.target.value })}
+                      className="w-full px-2 py-1.5 rounded border border-input bg-background text-xs"
+                    >
+                      {availableShells.wsl_distributions.map((distro) => (
+                        <option key={distro.name} value={distro.name}>
+                          {distro.name} {distro.is_default ? '(default)' : ''} {distro.version ? `- WSL${distro.version}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
+                {/* WSL Claude Path */}
+                {shellConfig?.environment === 'wsl' && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs">Claude Path in WSL</Label>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAutoDetectWslClaude}
+                        disabled={detectingWslClaude}
+                        className="h-6 text-xs px-2"
+                      >
+                        {detectingWslClaude ? (
+                          <>
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                            Detecting...
+                          </>
+                        ) : (
+                          'Auto-detect'
+                        )}
+                      </Button>
+                    </div>
+                    <Input
+                      placeholder="/home/user/.nvm/versions/node/v20/bin/claude"
+                      value={shellConfig.wsl_claude_path || ''}
+                      onChange={(e) => updateShellConfig({ wsl_claude_path: e.target.value })}
+                      className="text-xs h-8"
+                    />
+                    {shellConfig.wsl_claude_path && (
+                      <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                        <Check className="h-3 w-3" />
+                        Claude path configured
+                      </p>
+                    )}
+                  </div>
+                )}
+                
+                {/* Help text */}
+                <div className="pt-2 border-t border-border/50">
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Tips:</strong> Native uses Windows-installed Claude. WSL uses Claude inside your Linux distribution. 
+                    WSL installations are auto-detected in the dropdown above.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

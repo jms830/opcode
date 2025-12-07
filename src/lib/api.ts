@@ -105,10 +105,49 @@ export interface ClaudeInstallation {
   path: string;
   /** Version string if available */
   version?: string;
-  /** Source of discovery (e.g., "nvm", "system", "homebrew", "which") */
+  /** Source of discovery (e.g., "nvm", "system", "homebrew", "which", "wsl") */
   source: string;
   /** Type of installation */
   installation_type: "System" | "Custom";
+  /** WSL distribution name (if this is a WSL installation) */
+  wsl_distro?: string;
+}
+
+// Shell Environment types (Windows WSL/Git Bash support)
+
+/** Available shell environments */
+export type ShellEnvironment = "native" | "wsl" | "gitbash";
+
+/** WSL distribution information */
+export interface WslDistribution {
+  /** Name of the distribution (e.g., "Ubuntu", "Debian") */
+  name: string;
+  /** Whether this is the default distribution */
+  is_default: boolean;
+  /** WSL version (1 or 2) */
+  version?: number;
+}
+
+/** Detected shell environments available on the system */
+export interface AvailableShells {
+  /** Native Windows is always available on Windows */
+  native: boolean;
+  /** WSL distributions if available */
+  wsl_distributions: WslDistribution[];
+  /** Git Bash path if available */
+  git_bash_path?: string;
+}
+
+/** Shell configuration stored in settings */
+export interface ShellConfig {
+  /** The preferred shell environment */
+  environment: ShellEnvironment;
+  /** WSL distribution name (if using WSL) */
+  wsl_distro?: string;
+  /** Path to Claude in WSL (if using WSL) */
+  wsl_claude_path?: string;
+  /** Path to Git Bash (if using Git Bash) */
+  git_bash_path?: string;
 }
 
 // Agent API types
@@ -1938,6 +1977,76 @@ export const api = {
       return await apiCall<string>("slash_command_delete", { commandId, projectPath });
     } catch (error) {
       console.error("Failed to delete slash command:", error);
+      throw error;
+    }
+  },
+
+  // Shell Environment API methods (Windows WSL/Git Bash support)
+
+  /**
+   * Get available shell environments on the current system
+   * @returns Promise resolving to available shells info
+   */
+  async getAvailableShells(): Promise<AvailableShells> {
+    try {
+      return await apiCall<AvailableShells>("get_available_shells");
+    } catch (error) {
+      console.error("Failed to get available shells:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get the current shell configuration
+   * @returns Promise resolving to shell config
+   */
+  async getShellConfig(): Promise<ShellConfig> {
+    try {
+      return await apiCall<ShellConfig>("get_shell_config");
+    } catch (error) {
+      console.error("Failed to get shell config:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Save the shell configuration
+   * @param config - Shell configuration to save
+   * @returns Promise resolving when saved
+   */
+  async saveShellConfig(config: ShellConfig): Promise<void> {
+    try {
+      return await apiCall<void>("save_shell_config", { config });
+    } catch (error) {
+      console.error("Failed to save shell config:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Check if Claude is available in WSL
+   * @param distro - Optional WSL distribution name
+   * @returns Promise resolving to Claude path if found
+   */
+  async checkWslClaude(distro?: string): Promise<string | null> {
+    try {
+      return await apiCall<string | null>("check_wsl_claude", { distro });
+    } catch (error) {
+      console.error("Failed to check WSL Claude:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Auto-detect Claude in WSL and configure if found
+   * @param distro - Optional WSL distribution name
+   * @returns Promise resolving to shell config if Claude found
+   */
+  async autoDetectWslClaude(distro?: string): Promise<ShellConfig | null> {
+    try {
+      return await apiCall<ShellConfig | null>("auto_detect_wsl_claude", { distro });
+    } catch (error) {
+      console.error("Failed to auto-detect WSL Claude:", error);
       throw error;
     }
   },

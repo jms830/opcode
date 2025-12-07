@@ -18,7 +18,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { 
   api, 
   type ClaudeSettings,
-  type ClaudeInstallation
+  type ClaudeInstallation,
+  type ShellConfig
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Toast, ToastContainer } from "@/components/ui/toast";
@@ -97,11 +98,17 @@ export const Settings: React.FC<SettingsProps> = ({
   // Startup intro preference
   const [startupIntroEnabled, setStartupIntroEnabled] = useState(true);
   
+  // Shell environment state (Windows WSL/Git Bash support)
+  // Managed via ClaudeVersionSelector's Advanced Settings section
+  const [shellConfig, setShellConfig] = useState<ShellConfig | null>(null);
+  const [shellConfigChanged, setShellConfigChanged] = useState(false);
+  
   // Load settings on mount
   useEffect(() => {
     loadSettings();
     loadClaudeBinaryPath();
     loadAnalyticsSettings();
+    loadShellSettings();
     // Load tab persistence setting
     setTabPersistenceEnabled(TabPersistenceService.isEnabled());
     // Load startup intro setting (default to true if not set)
@@ -110,6 +117,18 @@ export const Settings: React.FC<SettingsProps> = ({
       setStartupIntroEnabled(pref === null ? true : pref === 'true');
     })();
   }, []);
+  
+  /**
+   * Loads shell environment settings (for Windows WSL/Git Bash support)
+   */
+  const loadShellSettings = async () => {
+    try {
+      const config = await api.getShellConfig();
+      setShellConfig(config);
+    } catch (err) {
+      console.error("Failed to load shell settings:", err);
+    }
+  };
 
   /**
    * Loads analytics settings
@@ -235,6 +254,12 @@ export const Settings: React.FC<SettingsProps> = ({
       if (proxySettingsChanged && saveProxySettings.current) {
         await saveProxySettings.current();
         setProxySettingsChanged(false);
+      }
+      
+      // Save shell config if changed
+      if (shellConfigChanged && shellConfig) {
+        await api.saveShellConfig(shellConfig);
+        setShellConfigChanged(false);
       }
 
       setToast({ message: "Settings saved successfully!", type: "success" });
@@ -658,8 +683,13 @@ export const Settings: React.FC<SettingsProps> = ({
                         selectedPath={currentBinaryPath}
                         onSelect={handleClaudeInstallationSelect}
                         simplified={true}
+                        initialShellConfig={shellConfig}
+                        onShellConfigChange={(config, hasChanges) => {
+                          setShellConfig(config);
+                          setShellConfigChanged(hasChanges);
+                        }}
                       />
-                      {binaryPathChanged && (
+                      {(binaryPathChanged || shellConfigChanged) && (
                         <p className="text-caption text-amber-600 dark:text-amber-400 flex items-center gap-1">
                           <AlertCircle className="h-3 w-3" />
                           Changes will be applied when you save settings.
@@ -969,6 +999,7 @@ export const Settings: React.FC<SettingsProps> = ({
                 </div>
               </Card>
             </TabsContent>
+            
             {/* Advanced Settings */}
             <TabsContent value="advanced" className="space-y-6">
               <Card className="p-6">
