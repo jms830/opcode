@@ -307,6 +307,7 @@ fn find_nvm_installations() -> Vec<ClaudeInstallation> {
                             version,
                             source: format!("nvm ({})", node_version),
                             installation_type: InstallationType::System,
+                            wsl_distro: None,
                         });
                     }
                 }
