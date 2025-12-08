@@ -2,11 +2,18 @@ use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 /// Shared module for detecting Claude Code binary installations
 /// Supports NVM installations, aliased paths, and version-based selection
 use std::path::PathBuf;
 use std::process::Command;
 use tauri::Manager;
+
+/// Windows constant for CREATE_NO_WINDOW flag
+/// This prevents console windows from flashing when running background commands
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Type of Claude installation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -552,11 +559,19 @@ fn find_wsl_installations() -> Vec<ClaudeInstallation> {
     installations
 }
 
+/// Creates a WSL command with CREATE_NO_WINDOW flag to prevent terminal flashing
+#[cfg(windows)]
+fn wsl_command() -> Command {
+    let mut cmd = Command::new("wsl");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 /// Get list of WSL distributions
 #[cfg(windows)]
 fn get_wsl_distributions() -> Result<Vec<String>, String> {
     // Run: wsl -l -q (quiet mode, just names)
-    let output = Command::new("wsl")
+    let output = wsl_command()
         .args(["-l", "-q"])
         .output()
         .map_err(|e| format!("Failed to run wsl -l -q: {}", e))?;
@@ -594,7 +609,7 @@ fn get_wsl_distributions() -> Result<Vec<String>, String> {
 #[cfg(windows)]
 fn find_claude_in_wsl(distro: &str) -> Option<String> {
     // Try 'which claude' in the WSL distribution
-    let output = Command::new("wsl")
+    let output = wsl_command()
         .args(["-d", distro, "--", "which", "claude"])
         .output()
         .ok()?;
@@ -615,7 +630,7 @@ fn find_claude_in_wsl(distro: &str) -> Option<String> {
         let nvm_base = format!("{}/.nvm/versions/node", home);
 
         // List node versions and check for claude
-        let output = Command::new("wsl")
+        let output = wsl_command()
             .args(["-d", distro, "--", "ls", "-1", &nvm_base])
             .output();
 
@@ -627,7 +642,7 @@ fn find_claude_in_wsl(distro: &str) -> Option<String> {
                     if !version.is_empty() {
                         let claude_path = format!("{}/{}/bin/claude", nvm_base, version);
                         // Check if claude exists at this path
-                        let check = Command::new("wsl")
+                        let check = wsl_command()
                             .args(["-d", distro, "--", "test", "-f", &claude_path])
                             .output();
 
@@ -643,7 +658,7 @@ fn find_claude_in_wsl(distro: &str) -> Option<String> {
 
         // Check ~/.local/bin/claude
         let local_claude = format!("{}/.local/bin/claude", home);
-        let check = Command::new("wsl")
+        let check = wsl_command()
             .args(["-d", distro, "--", "test", "-f", &local_claude])
             .output();
 
@@ -656,7 +671,7 @@ fn find_claude_in_wsl(distro: &str) -> Option<String> {
 
     // Check common system paths
     for path in common_paths {
-        let check = Command::new("wsl")
+        let check = wsl_command()
             .args(["-d", distro, "--", "test", "-f", path])
             .output();
 
@@ -673,7 +688,7 @@ fn find_claude_in_wsl(distro: &str) -> Option<String> {
 /// Get home directory in WSL
 #[cfg(windows)]
 fn get_wsl_home_dir(distro: &str) -> Option<String> {
-    let output = Command::new("wsl")
+    let output = wsl_command()
         .args(["-d", distro, "--", "echo", "$HOME"])
         .output()
         .ok()?;
@@ -691,7 +706,7 @@ fn get_wsl_home_dir(distro: &str) -> Option<String> {
 /// Get Claude version in WSL
 #[cfg(windows)]
 fn get_claude_version_in_wsl(distro: &str, claude_path: &str) -> Option<String> {
-    let output = Command::new("wsl")
+    let output = wsl_command()
         .args(["-d", distro, "--", claude_path, "--version"])
         .output()
         .ok()?;

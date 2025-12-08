@@ -13,6 +13,14 @@ use tokio::sync::Mutex;
 #[cfg(windows)]
 use crate::shell_environment::{create_wsl_command, ShellConfig, ShellEnvironment};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Windows constant for CREATE_NO_WINDOW flag
+/// This prevents console windows from flashing when running background commands
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Global state to track current Claude process
 pub struct ClaudeProcessState {
     pub current_process: Arc<Mutex<Option<Child>>>,
@@ -398,6 +406,8 @@ fn create_system_command_with_shell(
                 tokio_cmd.arg(arg);
             }
 
+            // Set CREATE_NO_WINDOW to prevent terminal flashing
+            tokio_cmd.creation_flags(CREATE_NO_WINDOW);
             tokio_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
             tokio_cmd
@@ -434,6 +444,8 @@ fn create_system_command_with_shell(
             );
 
             cmd.args(["-lc", &bash_command]);
+            // Set CREATE_NO_WINDOW to prevent terminal flashing
+            cmd.creation_flags(CREATE_NO_WINDOW);
             cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
             cmd

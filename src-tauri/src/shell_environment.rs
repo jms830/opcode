@@ -11,7 +11,22 @@
 
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+/// Windows constant for CREATE_NO_WINDOW flag
+/// This prevents console windows from flashing when running background commands
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Creates a WSL command with CREATE_NO_WINDOW flag to prevent terminal flashing
+#[cfg(windows)]
+fn wsl_command() -> Command {
+    let mut cmd = Command::new("wsl");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
 
 /// Available shell environments for Claude execution
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -101,7 +116,7 @@ fn detect_wsl_distributions() -> Vec<WslDistribution> {
     let mut distributions = Vec::new();
 
     // Run `wsl --list --verbose` to get distributions
-    match Command::new("wsl").args(["--list", "--verbose"]).output() {
+    match wsl_command().args(["--list", "--verbose"]).output() {
         Ok(output) if output.status.success() => {
             // WSL outputs UTF-16LE on Windows, need to handle that
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -220,7 +235,7 @@ fn detect_git_bash() -> Option<String> {
 pub fn check_claude_in_wsl(distro: Option<&str>) -> Option<String> {
     debug!("Checking for Claude in WSL (distro: {:?})...", distro);
 
-    let mut cmd = Command::new("wsl");
+    let mut cmd = wsl_command();
 
     if let Some(d) = distro {
         cmd.args(["-d", d]);
@@ -282,6 +297,7 @@ pub fn windows_to_wsl_path(path: &str) -> String {
 }
 
 /// Create a command that runs through WSL
+/// Uses CREATE_NO_WINDOW flag to prevent terminal flashing
 #[cfg(windows)]
 pub fn create_wsl_command(
     distro: Option<&str>,
@@ -289,7 +305,7 @@ pub fn create_wsl_command(
     args: &[String],
     working_dir: &str,
 ) -> Command {
-    let mut cmd = Command::new("wsl");
+    let mut cmd = wsl_command();
 
     // Specify distribution if provided
     if let Some(d) = distro {
