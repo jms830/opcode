@@ -1598,21 +1598,35 @@ pub async fn get_claude_binary_path(db: State<'_, AgentDb>) -> Result<Option<Str
 pub async fn set_claude_binary_path(db: State<'_, AgentDb>, path: String) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
 
-    // Validate that the path exists and is executable
-    let path_buf = std::path::PathBuf::from(&path);
-    if !path_buf.exists() {
-        return Err(format!("File does not exist: {}", path));
-    }
+    // Check if shell environment is WSL - skip validation for WSL paths
+    // since Linux paths won't exist on the Windows filesystem
+    let is_wsl_environment = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'shell_environment'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|env| env == "wsl")
+        .unwrap_or(false);
 
-    // Check if it's executable (on Unix systems)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::metadata(&path_buf)
-            .map_err(|e| format!("Failed to read file metadata: {}", e))?;
-        let permissions = metadata.permissions();
-        if permissions.mode() & 0o111 == 0 {
-            return Err(format!("File is not executable: {}", path));
+    // Only validate path exists if not using WSL environment
+    // WSL paths like /home/user/.nvm/.../claude won't exist from Windows perspective
+    if !is_wsl_environment {
+        let path_buf = std::path::PathBuf::from(&path);
+        if !path_buf.exists() {
+            return Err(format!("File does not exist: {}", path));
+        }
+
+        // Check if it's executable (on Unix systems)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(&path_buf)
+                .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+            let permissions = metadata.permissions();
+            if permissions.mode() & 0o111 == 0 {
+                return Err(format!("File is not executable: {}", path));
+            }
         }
     }
 
