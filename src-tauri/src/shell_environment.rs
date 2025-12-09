@@ -273,13 +273,33 @@ pub fn check_claude_in_wsl(_distro: Option<&str>) -> Option<String> {
 
 /// Convert a Windows path to WSL path format
 /// e.g., C:\Users\user\project -> /mnt/c/Users/user/project
+/// Also handles WSL UNC paths: \\wsl.localhost\Ubuntu\home\user -> /home/user
 #[cfg(windows)]
 pub fn windows_to_wsl_path(windows_path: &str) -> String {
     // Handle UNC paths and standard paths
     let path = windows_path.replace('\\', "/");
 
+    // Check for WSL UNC paths first: //wsl.localhost/Distro/path or //wsl$/Distro/path
+    if let Some(rest) = path.strip_prefix("//wsl.localhost/") {
+        // Format: //wsl.localhost/Ubuntu/home/user/... -> /home/user/...
+        // Skip the distro name (first path component)
+        if let Some(slash_pos) = rest.find('/') {
+            return rest[slash_pos..].to_string();
+        }
+        return format!("/{}", rest);
+    }
+    
+    if let Some(rest) = path.strip_prefix("//wsl$/") {
+        // Format: //wsl$/Ubuntu/home/user/... -> /home/user/...
+        // Skip the distro name (first path component)
+        if let Some(slash_pos) = rest.find('/') {
+            return rest[slash_pos..].to_string();
+        }
+        return format!("/{}", rest);
+    }
+
     if let Some(rest) = path.strip_prefix("//") {
-        // UNC path: \\server\share -> /mnt/server/share (approximate)
+        // Other UNC paths: \\server\share -> /mnt/server/share (approximate)
         format!("/mnt/{}", rest)
     } else if path.len() >= 2 && path.chars().nth(1) == Some(':') {
         // Drive letter path: C:/... -> /mnt/c/...
@@ -395,10 +415,27 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn test_windows_to_wsl_path() {
+        // Standard Windows drive paths
         assert_eq!(
             windows_to_wsl_path(r"C:\Users\test\project"),
             "/mnt/c/Users/test/project"
         );
         assert_eq!(windows_to_wsl_path(r"D:\dev\myapp"), "/mnt/d/dev/myapp");
+        
+        // WSL UNC paths - these should extract the Linux path
+        assert_eq!(
+            windows_to_wsl_path(r"\\wsl.localhost\Ubuntu\home\jordan\project"),
+            "/home/jordan/project"
+        );
+        assert_eq!(
+            windows_to_wsl_path(r"\\wsl$\Ubuntu\home\user\code"),
+            "/home/user/code"
+        );
+        
+        // Already a Linux path (passthrough)
+        assert_eq!(
+            windows_to_wsl_path("/home/jordan/project"),
+            "/home/jordan/project"
+        );
     }
 }

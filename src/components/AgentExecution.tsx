@@ -616,10 +616,10 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
                         <div className="w-2 h-2 rounded-full bg-primary" />
                       )}
                     </div>
-<div className="text-left">
-                                      <div className="text-body-small font-medium">Claude Sonnet</div>
-                                      <div className="text-caption text-muted-foreground">Balanced performance</div>
-                                    </div>
+                    <div className="text-left">
+                      <div className="text-body-small font-medium">Claude Sonnet</div>
+                      <div className="text-caption text-muted-foreground">Balanced performance</div>
+                    </div>
                   </div>
                 </motion.button>
                 
@@ -646,10 +646,10 @@ export const AgentExecution: React.FC<AgentExecutionProps> = ({
                         <div className="w-2 h-2 rounded-full bg-primary" />
                       )}
                     </div>
-<div className="text-left">
-                                      <div className="text-body-small font-medium">Claude Opus</div>
-                                      <div className="text-caption text-muted-foreground">Most capable</div>
-                                    </div>
+                    <div className="text-left">
+                      <div className="text-body-small font-medium">Claude Opus</div>
+                      <div className="text-caption text-muted-foreground">Most capable</div>
+                    </div>
                   </div>
                 </motion.button>
                 

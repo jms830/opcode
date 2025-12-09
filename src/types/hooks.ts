@@ -2,6 +2,38 @@
  * Types for Claude Code hooks configuration
  */
 
+/**
+ * Model type for Claude model selection
+ * Used across prompt input, agents, and session components
+ */
+export type ClaudeModel = "sonnet" | "opus" | "haiku";
+
+/**
+ * Model display configuration
+ */
+export interface ModelConfig {
+  id: ClaudeModel;
+  name: string;
+  description: string;
+  shortName: string;
+}
+
+/**
+ * Available Claude models with display metadata
+ */
+export const CLAUDE_MODELS: ModelConfig[] = [
+  { id: "sonnet", name: "Claude Sonnet", description: "Balanced performance", shortName: "S" },
+  { id: "opus", name: "Claude Opus", description: "Most capable", shortName: "O" },
+  { id: "haiku", name: "Claude Haiku", description: "Fast & efficient", shortName: "H" },
+];
+
+/**
+ * Get display name for a model
+ */
+export function getModelDisplayName(model: ClaudeModel): string {
+  return CLAUDE_MODELS.find(m => m.id === model)?.name ?? model;
+}
+
 export interface HookCommand {
   type: 'command';
   command: string;
